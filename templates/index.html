@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flask + Three.js Temple Run</title>
+
+    <!-- Bootstrap CSS (CDN) -->
+    <link
+        href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+        rel="stylesheet">
+</head>
+<body class="bg-dark text-light">
+
+    <nav class="navbar navbar-dark bg-black border-bottom border-secondary">
+        <div class="container">
+            <span class="navbar-brand mb-0 h1">🏃 3D Temple Run</span>
+        </div>
+    </nav>
+
+    <div class="container my-4">
+
+        <div class="row mb-3">
+            <div class="col-12">
+                <div class="card bg-secondary text-light shadow">
+                    <div class="card-body d-flex flex-wrap justify-content-between align-items-center gap-2">
+                        <div>
+                            <span class="badge bg-primary fs-6">Score: <span id="scoreCount">0</span></span>
+                            <span class="badge bg-warning text-dark fs-6">Coins: <span id="coinCount">0</span></span>
+                            <span class="badge bg-info fs-6">Speed: <span id="speedCount">1.0</span>x</span>
+                        </div>
+                        <div class="d-flex gap-2">
+                            <button id="startBtn" class="btn btn-success">Start Run</button>
+                            <button id="restartBtn" class="btn btn-warning">Restart</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row">
+            <div class="col-12 col-lg-8 mb-3 mb-lg-0">
+                <div class="card bg-secondary text-light shadow">
+                    <div class="card-header">
+                        Arrow keys / A-D to switch lanes, W / Up to jump, S / Down to slide
+                    </div>
+                    <div class="card-body p-0">
+                        <div id="scene-container" class="w-100" style="height: 560px;"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-12 col-lg-4">
+                <div class="card bg-secondary text-light shadow mb-3">
+                    <div class="card-header">Controls</div>
+                    <div class="card-body d-grid gap-2">
+                        <button class="btn btn-outline-light" id="leftBtn">⬅ Left</button>
+                        <div class="d-flex gap-2">
+                            <button class="btn btn-outline-light flex-fill" id="jumpBtn">⬆ Jump</button>
+                            <button class="btn btn-outline-light flex-fill" id="slideBtn">⬇ Slide</button>
+                        </div>
+                        <button class="btn btn-outline-light" id="rightBtn">Right ➡</button>
+                    </div>
+                </div>
+
+                <div class="card bg-secondary text-light shadow">
+                    <div class="card-header">How to Play</div>
+                    <div class="card-body">
+                        <ul class="mb-0">
+                            <li>Run forever — obstacles speed up over time</li>
+                            <li>Switch lanes to dodge barriers</li>
+                            <li>Jump over low obstacles, slide under overhead beams</li>
+                            <li>Collect gold coins for bonus score</li>
+                            <li>Hitting an obstacle ends the run</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row mt-4">
+            <div class="col-12">
+                <div id="gameOverAlert" class="alert alert-danger d-none mb-0" role="alert">
+                    💥 You crashed! Final Score: <span id="finalScore">0</span> | Coins: <span id="finalCoins">0</span>.
+                    Click <strong>Restart</strong> to run again.
+                </div>
+                <div id="startAlert" class="alert alert-info mb-0" role="alert">
+                    Click <strong>Start Run</strong> to begin. Use keyboard or on-screen buttons to control your runner.
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bootstrap JS Bundle (CDN) -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+
+    <!-- Three.js (CDN) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+    <script>
+        // ============================================================
+        // SCENE SETUP
+        // ============================================================
+        let scene, camera, renderer, container;
+        const LANE_X = [-1.6, 0, 1.6];
+        const GRAVITY = -22;
+        const JUMP_VELOCITY = 9;
+
+        container = document.getElementById('scene-container');
+
+        function initScene() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x9fd6ff);
+            scene.fog = new THREE.Fog(0x9fd6ff, 12, 40);
+
+            camera = new THREE.PerspectiveCamera(
+                60,
+                container.clientWidth / container.clientHeight,
+                0.1,
+                200
+            );
+            camera.position.set(0, 3.2, 6.5);
+            camera.lookAt(0, 1, -5);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(container.clientWidth, container.clientHeight);
+            container.innerHTML = '';
+            container.appendChild(renderer.domElement);
+
+            const ambient = new THREE.AmbientLight(0xffffff, 0.8);
+            scene.add(ambient);
+
+            const sun = new THREE.DirectionalLight(0xffffff, 0.9);
+            sun.position.set(5, 10, 5);
+            scene.add(sun);
+
+            window.addEventListener('resize', onResize);
+        }
+
+        function onResize() {
+            camera.aspect = container.clientWidth / container.clientHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(container.clientWidth, container.clientHeight);
+        }
+
+        // ============================================================
+        // TRACK (scrolling floor segments)
+        // ============================================================
+        let trackSegments = [];
+        const SEGMENT_LENGTH = 10;
+        const SEGMENT_COUNT = 6;
+
+        function buildTrack() {
+            trackSegments.forEach(s => scene.remove(s));
+            trackSegments = [];
+
+            for (let i = 0; i < SEGMENT_COUNT; i++) {
+                const geo = new THREE.BoxGeometry(5.6, 0.4, SEGMENT_LENGTH);
+                const mat = new THREE.MeshStandardMaterial({ color: i % 2 === 0 ? 0xb5895a : 0xa87a4a });
+                const seg = new THREE.Mesh(geo, mat);
+                seg.position.set(0, -0.2, -i * SEGMENT_LENGTH);
+                scene.add(seg);
+                trackSegments.push(seg);
+            }
+
+            // side walls for visual framing
+            [-3, 3].forEach(x => {
+                const wallGeo = new THREE.BoxGeometry(0.4, 3, SEGMENT_LENGTH * SEGMENT_COUNT);
+                const wallMat = new THREE.MeshStandardMaterial({ color: 0x8b7355 });
+                const wall = new THREE.Mesh(wallGeo, wallMat);
+                wall.position.set(x, 1.3, -SEGMENT_LENGTH * SEGMENT_COUNT / 2);
+                scene.add(wall);
+                trackSegments.push(wall);
+            });
+        }
+
+        function scrollTrack(distance) {
+            trackSegments.forEach(seg => {
+                seg.position.z += distance;
+            });
+            // recycle floor segments that passed behind the camera
+            trackSegments.forEach(seg => {
+                if (seg.geometry.parameters.depth === SEGMENT_LENGTH && seg.position.z > SEGMENT_LENGTH) {
+                    seg.position.z -= SEGMENT_LENGTH * SEGMENT_COUNT;
+                }
+            });
+        }
+
+        // ============================================================
+        // PLAYER (runner)
+        // ============================================================
+        let player, playerLane = 1;
+        let playerY = 0, playerVY = 0;
+        let isJumping = false, isSliding = false;
+        let slideTimer = 0;
+
+        function createPlayer() {
+            const group = new THREE.Group();
+
+            const bodyGeo = new THREE.CapsuleGeometry(0.35, 0.7, 8, 16);
+            const bodyMat = new THREE.MeshStandardMaterial({ color: 0xdc3545 });
+            const body = new THREE.Mesh(bodyGeo, bodyMat);
+            body.position.y = 0.75;
+            group.add(body);
+
+            const headGeo = new THREE.SphereGeometry(0.28, 16, 16);
+            const headMat = new THREE.MeshStandardMaterial({ color: 0xffe0bd });
+            const head = new THREE.Mesh(headGeo, headMat);
+            head.position.y = 1.35;
+            group.add(head);
+
+            group.position.set(LANE_X[playerLane], 0, 2);
+            scene.add(group);
+            return group;
+        }
+
+        function resetPlayer() {
+            if (player) scene.remove(player);
+            playerLane = 1;
+            playerY = 0;
+            playerVY = 0;
+            isJumping = false;
+            isSliding = false;
+            slideTimer = 0;
+            player = createPlayer();
+        }
+
+        // ============================================================
+        // OBSTACLES & COINS
+        // ============================================================
+        let obstacles = []; // { mesh, lane, z, type, hit }
+        let coins = [];     // { mesh, lane, z, collected }
+        let spawnTimer = 0;
+
+        function spawnObstacle() {
+            const lane = Math.floor(Math.random() * 3);
+            const type = Math.random() < 0.5 ? 'barrier' : 'beam'; // barrier = jump over, beam = slide under
+
+            let mesh;
+            if (type === 'barrier') {
+                const geo = new THREE.BoxGeometry(1.2, 0.8, 0.5);
+                const mat = new THREE.MeshStandardMaterial({ color: 0x6c757d });
+                mesh = new THREE.Mesh(geo, mat);
+                mesh.position.set(LANE_X[lane], 0.4, -45);
+            } else {
+                const geo = new THREE.BoxGeometry(1.2, 0.5, 0.5);
+                const mat = new THREE.MeshStandardMaterial({ color: 0x495057 });
+                mesh = new THREE.Mesh(geo, mat);
+                mesh.position.set(LANE_X[lane], 1.6, -45);
+            }
+
+            scene.add(mesh);
+            obstacles.push({ mesh, lane, type, hit: false });
+        }
+
+        function spawnCoin() {
+            const lane = Math.floor(Math.random() * 3);
+            const geo = new THREE.CylinderGeometry(0.25, 0.25, 0.08, 20);
+            const mat = new THREE.MeshStandardMaterial({ color: 0xffc107, metalness: 0.6, roughness: 0.3 });
+            const mesh = new THREE.Mesh(geo, mat);
+            mesh.rotation.x = Math.PI / 2;
+            mesh.position.set(LANE_X[lane], 1.0, -46);
+            scene.add(mesh);
+            coins.push({ mesh, lane, collected: false });
+        }
+
+        function clearObstaclesAndCoins() {
+            obstacles.forEach(o => scene.remove(o.mesh));
+            coins.forEach(c => scene.remove(c.mesh));
+            obstacles = [];
+            coins = [];
+        }
+
+        // ============================================================
+        // GAME STATE
+        // ============================================================
+        let running = false;
+        let gameOver = false;
+        let score = 0;
+        let coinCount = 0;
+        let speed = 1.0;
+        let baseSpeed = 9; // units/sec
+        let elapsed = 0;
+
+        const scoreEl = document.getElementById('scoreCount');
+        const coinEl = document.getElementById('coinCount');
+        const speedEl = document.getElementById('speedCount');
+        const gameOverAlert = document.getElementById('gameOverAlert');
+        const startAlert = document.getElementById('startAlert');
+        const finalScoreEl = document.getElementById('finalScore');
+        const finalCoinsEl = document.getElementById('finalCoins');
+
+        function updateHUD() {
+            scoreEl.textContent = Math.floor(score);
+            coinEl.textContent = coinCount;
+            speedEl.textContent = speed.toFixed(1);
+        }
+
+        function startGame() {
+            resetPlayer();
+            clearObstaclesAndCoins();
+            buildTrack();
+
+            running = true;
+            gameOver = false;
+            score = 0;
+            coinCount = 0;
+            speed = 1.0;
+            elapsed = 0;
+            spawnTimer = 0;
+
+            gameOverAlert.classList.add('d-none');
+            startAlert.classList.add('d-none');
+            updateHUD();
+        }
+
+        function endGame() {
+            running = false;
+            gameOver = true;
+            finalScoreEl.textContent = Math.floor(score);
+            finalCoinsEl.textContent = coinCount;
+            gameOverAlert.classList.remove('d-none');
+        }
+
+        // ============================================================
+        // INPUT HANDLING
+        // ============================================================
+        function moveLeft() {
+            if (!running) return;
+            playerLane = Math.max(0, playerLane - 1);
+        }
+        function moveRight() {
+            if (!running) return;
+            playerLane = Math.min(2, playerLane + 1);
+        }
+        function jump() {
+            if (!running || isJumping || isSliding) return;
+            isJumping = true;
+            playerVY = JUMP_VELOCITY;
+        }
+        function slide() {
+            if (!running || isJumping || isSliding) return;
+            isSliding = true;
+            slideTimer = 0.6;
+        }
+
+        window.addEventListener('keydown', (e) => {
+            switch (e.key) {
+                case 'ArrowLeft': case 'a': case 'A': moveLeft(); break;
+                case 'ArrowRight': case 'd': case 'D': moveRight(); break;
+                case 'ArrowUp': case 'w': case 'W': jump(); break;
+                case 'ArrowDown': case 's': case 'S': slide(); break;
+            }
+        });
+
+        document.getElementById('leftBtn').addEventListener('click', moveLeft);
+        document.getElementById('rightBtn').addEventListener('click', moveRight);
+        document.getElementById('jumpBtn').addEventListener('click', jump);
+        document.getElementById('slideBtn').addEventListener('click', slide);
+        document.getElementById('startBtn').addEventListener('click', startGame);
+        document.getElementById('restartBtn').addEventListener('click', startGame);
+
+        // ============================================================
+        // COLLISION HELPERS
+        // ============================================================
+        function boxesOverlapZ(z1, z2, threshold) {
+            return Math.abs(z1 - z2) < threshold;
+        }
+
+        // ============================================================
+        // GAME LOOP
+        // ============================================================
+        let lastTime = performance.now();
+
+        function updateGame(dt) {
+            if (!running) return;
+
+            elapsed += dt;
+            speed = 1.0 + elapsed * 0.02; // gradually speeds up
+            const moveDist = baseSpeed * speed * dt;
+
+            score += moveDist * 1.2;
+
+            // smooth lane movement
+            const targetX = LANE_X[playerLane];
+            player.position.x += (targetX - player.position.x) * Math.min(dt * 12, 1);
+
+            // jump physics
+            if (isJumping) {
+                playerVY += GRAVITY * dt;
+                playerY += playerVY * dt;
+                if (playerY <= 0) {
+                    playerY = 0;
+                    isJumping = false;
+                    playerVY = 0;
+                }
+            }
+
+            // slide timer
+            if (isSliding) {
+                slideTimer -= dt;
+                if (slideTimer <= 0) isSliding = false;
+            }
+
+            player.position.y = playerY;
+            player.scale.y = isSliding ? 0.5 : 1.0;
+            player.position.z = 2;
+
+            // scroll world toward camera
+            scrollTrack(moveDist);
+            obstacles.forEach(o => o.mesh.position.z += moveDist);
+            coins.forEach(c => c.mesh.position.z += moveDist);
+
+            // spawn new obstacles/coins periodically
+            spawnTimer -= dt;
+            if (spawnTimer <= 0) {
+                spawnObstacle();
+                if (Math.random() < 0.6) spawnCoin();
+                spawnTimer = Math.max(0.55, 1.1 - elapsed * 0.01);
+            }
+
+            // collision + cleanup: obstacles
+            obstacles = obstacles.filter(o => {
+                if (o.mesh.position.z > 8) {
+                    scene.remove(o.mesh);
+                    return false;
+                }
+                if (!o.hit && o.lane === playerLane && boxesOverlapZ(o.mesh.position.z, player.position.z, 0.7)) {
+                    const dodged = (o.type === 'barrier' && isJumping && playerY > 0.5) ||
+                                    (o.type === 'beam' && isSliding);
+                    if (!dodged) {
+                        o.hit = true;
+                        endGame();
+                    }
+                }
+                return true;
+            });
+
+            // collision + cleanup: coins
+            coins = coins.filter(c => {
+                if (c.mesh.position.z > 8) {
+                    scene.remove(c.mesh);
+                    return false;
+                }
+                c.mesh.rotation.z += dt * 4;
+                if (!c.collected && c.lane === playerLane && boxesOverlapZ(c.mesh.position.z, player.position.z, 0.6)) {
+                    c.collected = true;
+                    coinCount++;
+                    score += 25;
+                    scene.remove(c.mesh);
+                    return false;
+                }
+                return true;
+            });
+
+            updateHUD();
+        }
+
+        function animate(now) {
+            requestAnimationFrame(animate);
+            const dt = Math.min((now - lastTime) / 1000, 0.033);
+            lastTime = now;
+
+            updateGame(dt);
+            renderer.render(scene, camera);
+        }
+
+        // ============================================================
+        // INIT
+        // ============================================================
+        initScene();
+        buildTrack();
+        resetPlayer();
+        requestAnimationFrame(animate);
+    </script>
+</body>
+</html>
